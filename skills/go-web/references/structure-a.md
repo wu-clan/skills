@@ -1,33 +1,56 @@
-# Structure A: Single-Application Layered Go Service
+# Go Web Single-App Architecture
+
+Canonical name: `go-web-sa-arch`
 
 Use this reference for repositories shaped like:
 
 ```text
-api/
-cmd/
-config/
-database/
-internal/
-  service/
-  dao/
-  model/
-  dto/
-pkg/
+myproject/
+├── api/
+│   ├── v1/
+│   └── router.go
+├── cmd/
+│   ├── server/
+│   └── worker/
+├── config/
+├── database/
+├── deploy/
+├── migrations/
+├── pkg/
+├── internal/
+│   ├── service/
+│   ├── dao/
+│   ├── model/
+│   ├── dto/
+│   ├── middleware/
+│   ├── worker/
+│   └── common/
+├── scripts/
+├── go.mod
+└── README.md
 ```
 
-This reference explains how to apply a practical coding style to a single-application layered Go service.
+This reference describes a single-application Web service architecture with clear layer boundaries. One process can expose the main HTTP service, while another process can run background jobs, but both still belong to the same application boundary.
 
 ## Directory Responsibilities
 
-- `cmd/<entry>`: bootstrap the process, load config, init logger, init DB, register routes, start servers, handle shutdown
-- `api/`: HTTP routing and handler/controller entry points
-- `internal/service/`: business orchestration, validation flow, paging rules, aggregation, error mapping
-- `internal/dao/`: persistence and query logic, batch upsert, record lookup, list/count queries
-- `internal/model/`: persistence models and schema-facing structs
-- `internal/dto/`: request and response transport structs when they differ from models
-- `database/`: connection lifecycle and migrations
-- `config/`: config loading and typed config objects
-- `pkg/`: cross-cutting utilities that are not domain-specific
+- `api/v1/`: HTTP adapter layer. Keep handlers thin: parse input, call service, return unified responses.
+- `api/router.go`: Route assembly entry. Register versioned routes, middleware, and public API boundaries.
+- `cmd/server/`: Web process entry. Initialize dependencies and start the main HTTP service.
+- `cmd/worker/`: Background process entry. Start workers, schedulers, or queue consumers without coupling them to HTTP routing.
+- `config/`: Configuration structs, loading logic, and environment-specific configuration mapping.
+- `database/`: Database and infrastructure client initialization, connection management, and transaction entry points.
+- `deploy/`: Deployment-facing assets such as Docker, Kubernetes, Helm, or CI deployment templates.
+- `migrations/`: Database schema migrations or migration version files.
+- `pkg/`: Cross-module or cross-project utilities. Do not place strongly business-specific code here.
+- `internal/service/`: Use-case orchestration layer for validation, flow control, pagination normalization, aggregation, and error mapping.
+- `internal/dao/`: Data access layer for CRUD, conditional queries, batch writes, and persistence details. Do not put HTTP semantics here.
+- `internal/model/`: Persistence entities, usually ORM models or storage-facing structs. Do not use them as API presentation shapes by default.
+- `internal/dto/`: Transport contracts for request binding and response projections. Do not encode persistence rules here.
+- `internal/middleware/`: Cross-cutting application concerns such as auth, logging, tracing, rate limiting, and recovery.
+- `internal/worker/`: Background job handlers and worker execution logic.
+- `internal/common/`: Low-coupling shared definitions such as constants, error codes, enums, and lightweight shared types.
+- `scripts/`: Build, release, operations, and developer support scripts.
 
 ## Dependency Direction
 
@@ -41,7 +64,7 @@ service -> dto, model, dao, common
 pkg/config/database are infrastructure dependencies
 ```
 
-Keep the direction mostly one-way. A DAO should not import handler code. A model should not depend on Gin. A DTO should not control database behavior.
+Keep the direction mostly one-way. Handler depends on service, not DAO. DAO should not import handler code. Model should not depend on Gin. DTO should not control database behavior. Worker code may call service or DAO depending on the repository pattern, but should still avoid reverse dependencies on the HTTP layer.
 
 ## Coding Style
 
@@ -70,20 +93,20 @@ func GetX(c *gin.Context) {
 
 ### Service
 
-Service owns request binding, validation, orchestration, pagination normalization, and error mapping.
+Service owns use-case execution: request validation, orchestration, pagination normalization, aggregation, and error mapping.
 
-- bind request DTO with shared helper when possible
+- bind or accept validated request DTOs according to the repository convention
 - validate required business constraints explicitly
 - normalize page and page size centrally
 - call DAO functions with plain values
 - convert lower-level errors into app errors with HTTP status codes
 - use service for cross-entity composition and aggregation
 
-Prefer explicit flow over abstraction-heavy service frameworks.
+Prefer explicit flow over abstraction-heavy service frameworks. Service should express business steps clearly and should not hide key rules inside middleware or DAO.
 
 ### DAO
 
-DAO exposes direct, readable query helpers.
+DAO exposes direct, readable persistence helpers.
 
 - `GetXByID`
 - `ListX`
@@ -98,21 +121,25 @@ DAO rules:
 - return model pointers or slices plus totals when pagination needs them
 - never accept `*gin.Context`
 
+DAO should answer storage questions, not transport questions. If a result is only for API presentation, prefer shaping it in DTO or service unless the repository already uses DAO projections consistently.
+
 ### Model
 
-Use models for persistence-facing entities.
+Use models for persistence-facing entities and storage mapping.
 
 - keep structs plain and explicit
 - avoid adding transport-only concerns into model types
-- add helper methods only when behavior truly belongs to the entity
+- add helper methods only when behavior truly belongs to the entity itself
 
 ### DTO
 
-Use DTOs for transport boundaries.
+Use DTOs for transport boundaries and interface contracts.
 
 - request DTOs carry binding tags
 - response DTOs carry projections or paging wrappers
 - when model and response shape are identical enough, follow the local repository pattern instead of forcing a separate response DTO
+
+DTO is the right place for request binding tags, pagination parameters, filtering fields, and response-only projections.
 
 ## Naming Guidance
 
@@ -137,6 +164,8 @@ Keep error handling small and consistent:
 - map unexpected persistence or infra errors to `500`
 - use `errors.Is(err, gorm.ErrRecordNotFound)` style checks in service, not in handlers
 
+Handlers should serialize errors. Services should interpret them.
+
 ## File Placement Rules
 
 When adding a new resource or module:
@@ -148,6 +177,8 @@ When adding a new resource or module:
 5. add request or response DTOs in `internal/dto/` if transport shape differs
 6. register routes in `api/router.go` or the existing router file
 7. extract shared bind/paging/validation helpers only after repetition is obvious
+
+If the feature is background-only, prefer `internal/worker/` plus `cmd/worker/` instead of exposing an HTTP entry.
 
 ## Standard API Addition Flow
 

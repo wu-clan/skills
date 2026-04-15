@@ -1,49 +1,74 @@
-# Structure B: Multi-Entry / Multi-App Go Service
+# Go Web Multi-App Architecture
+
+Canonical name: `go-web-ma-arch`
 
 Use this reference for repositories shaped like:
 
 ```text
-cmd/
-  admin/
-  client/
-internal/
-  app/
-    admin/
-      api/
-      service/
-      dao/
-      model/
-      dto/
-    client/
-      api/
-      service/
-      dao/
-      model/
-      dto/
-  common/
-  middleware/
-config/
-database/
-pkg/
+myproject/
+├── cmd/
+│   ├── admin/
+│   └── client/
+├── config/
+├── database/
+├── deploy/
+├── migrations/
+├── pkg/
+├── internal/
+│   ├── app/
+│   │   ├── admin/
+│   │   │   ├── api/
+│   │   │   │   ├── v1/
+│   │   │   │   └── router.go
+│   │   │   ├── service/
+│   │   │   ├── dao/
+│   │   │   ├── model/
+│   │   │   └── dto/
+│   │   └── client/
+│   │   │   ├── api/
+│   │   │   │   ├── v1/
+│   │   │   │   └── router.go
+│   │   │   ├── service/
+│   │   │   ├── dao/
+│   │   │   ├── model/
+│   │   │   └── dto/
+│   ├── middleware/
+│   └── common/
+├── scripts/
+├── go.mod
+└── README.md
 ```
 
-This reference explains how to apply the same coding discipline to a multi-entry or multi-app repository.
+This reference describes a multi-application repository where multiple delivery surfaces share infrastructure, but each app keeps its own API, service, DAO, model, and DTO boundaries.
 
 ## Core Principle
 
-Separate by application boundary first, by technical layer second. Then apply the same thin-handler, service-first, explicit-DAO style inside each app.
+Separate by application boundary first, by technical layer second. In other words, decide which app owns the feature before deciding which layer inside that app owns the code.
 
 ## Directory Responsibilities
 
-- `cmd/<app>`: process entry for one application surface
-- `internal/app/<app>/api/`: protocol adapter for that app only
-- `internal/app/<app>/service/`: use cases for that app only
-- `internal/app/<app>/dao/`: storage access scoped to that app's needs
-- `internal/app/<app>/model/`: app-local model or projection types when needed
-- `internal/app/<app>/dto/`: app-local request/response contracts
-- `internal/common/`: shared errors, constants, enums, small common helpers
-- `internal/middleware/`: cross-app interceptors
-- `config/`, `database/`, `pkg/`: shared infrastructure
+- `cmd/admin/`: Admin process entry. Assemble admin dependencies and start the admin-facing service.
+- `cmd/client/`: Client process entry. Assemble client dependencies and start the client-facing service.
+- `config/`: Configuration structs, loading logic, and environment-specific configuration mapping.
+- `database/`: Infrastructure connection setup such as database, cache, or message-broker clients.
+- `deploy/`: Deployment-facing assets.
+- `migrations/`: Database schema versioning and migration assets.
+- `pkg/`: Cross-app or cross-project reusable utilities.
+- `internal/app/admin/api/v1/`: Admin HTTP adapter layer.
+- `internal/app/admin/api/router.go`: Admin route assembly entry.
+- `internal/app/admin/service/`: Admin use-case orchestration layer.
+- `internal/app/admin/dao/`: Admin data access layer.
+- `internal/app/admin/model/`: Admin persistence entities or internal projections.
+- `internal/app/admin/dto/`: Admin request and response contracts.
+- `internal/app/client/api/v1/`: Client HTTP adapter layer.
+- `internal/app/client/api/router.go`: Client route assembly entry.
+- `internal/app/client/service/`: Client use-case orchestration layer.
+- `internal/app/client/dao/`: Client data access layer.
+- `internal/app/client/model/`: Client persistence entities or internal projections.
+- `internal/app/client/dto/`: Client request and response contracts.
+- `internal/middleware/`: Cross-cutting middleware reusable across apps.
+- `internal/common/`: Low-coupling shared definitions such as constants, error codes, enums, and lightweight shared types.
+- `scripts/`: Build, release, operations, and developer support scripts.
 
 ## Dependency Direction
 
@@ -55,19 +80,19 @@ cmd/<app> -> internal/app/<app>/api -> service -> dao
 shared infra: config, database, pkg, internal/common, internal/middleware
 ```
 
-Cross-app imports should be rare. Prefer extracting truly shared logic into a neutral shared package rather than importing one app's service package from another.
+Cross-app imports should be rare. Prefer extracting truly shared logic into a neutral shared package rather than importing one app's private service package from another. Shared infra can be common; business ownership should stay app-local unless there is a very strong reason to merge.
 
 ## Coding Style
 
 ### App-First Organization
 
-Before writing code, decide which app owns the feature.
+Before writing code, decide which app owns the feature. This is the first question, not a later refactor step.
 
 - admin-only feature -> `internal/app/admin/...`
 - client-only feature -> `internal/app/client/...`
 - truly shared concern -> shared package outside app folders
 
-Do not put app-specific request DTOs or handlers in shared locations.
+Do not put app-specific request DTOs, handlers, or service rules in shared locations.
 
 ### Handler Style
 
@@ -77,6 +102,8 @@ Reuse the thin-handler pattern inside each app.
 - handler delegates almost immediately to service
 - handler writes unified success/error response
 - app-specific protocol exceptions stay at the edge
+
+The handler layer should explain how the app speaks to the outside world, not how the business works internally.
 
 ### Service Style
 
@@ -88,6 +115,8 @@ Reuse the same service style inside each app.
 - service maps domain and persistence errors into app-level errors
 - service coordinates multiple DAO calls or shared helpers
 
+Service is still the main business layer even in a multi-app repository; app split does not weaken layer discipline.
+
 ### DAO Style
 
 Reuse the same DAO style inside each app.
@@ -96,6 +125,8 @@ Reuse the same DAO style inside each app.
 - keep query logic readable
 - return model slices, projections, totals, or single models explicitly
 - avoid HTTP types and app response wrappers in DAO
+
+DAO belongs to the app when query shape or ownership is app-specific. Only move DAO code to shared packages when multiple apps truly need the same persistence behavior.
 
 ### Shared Code Discipline
 
@@ -112,6 +143,8 @@ Good shared candidates in this style:
 - pagination defaults
 - bind helpers if multiple apps share the same transport stack
 - logging and response utilities
+
+Bad shared candidates are app-specific handlers, app-specific DTOs, and business rules that only one app understands.
 
 ## Naming Guidance
 
@@ -131,6 +164,8 @@ Keep the same error-handling pattern, but scoped per app.
 - handlers should not implement business error mapping themselves
 - record-not-found handling should stay near service logic
 
+Handlers serialize errors. App services interpret them.
+
 ## File Placement Rules
 
 When adding a feature:
@@ -141,6 +176,8 @@ When adding a feature:
 4. keep request/response DTOs under that app
 5. keep handler/service/dao separation strict
 6. move to shared packages only after duplication proves it is worth it
+
+If a feature is only used by admin, keep it in admin even if client may someday need something similar. Duplicate a small amount first; extract later when the shared shape is real.
 
 ## Standard API Addition Flow
 
