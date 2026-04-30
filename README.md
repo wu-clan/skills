@@ -1,6 +1,6 @@
 # Skills
 
-AI agent skills for me.
+Reusable AI agent skills.
 
 ## Installation
 
@@ -9,6 +9,24 @@ npx skills add wu-clan/skills
 ```
 
 ## Available Skills
+
+### go-web
+
+Apply pragmatic Go web service conventions for Gin/GORM-style repositories with layered API, service, DAO, model, DTO, middleware, config, database, deploy, migrations, pkg, and scripts organization.
+
+**Use Cases:**
+
+- Classify a Go web repository as single-app or multi-app architecture
+- Apply thin handler, service orchestration, DAO persistence, DTO boundary, and model rules
+- Keep response, error, context, pagination, config, database, middleware, and logging patterns consistent
+- Place new API, service, DAO, model, DTO, deploy, migration, and script changes in the right layer
+
+**Included References:**
+
+- `SKILL.md` - Workflow, structure selection, common rules, and anti-patterns
+- `references/structure-a.md` - Single-application Go web architecture
+- `references/structure-b.md` - Multi-application Go web architecture
+- `references/style-baseline.md` - Reusable Gin/GORM coding style baseline
 
 ### healthy-expression
 
