@@ -1,19 +1,20 @@
 # Style Baseline
 
-Use this reference as the style source for the Go skill. Treat it as a collection of coding habits that can be transplanted into service-oriented Go repositories.
+Use this reference as the style source for the Go skill. It captures a pragmatic Gin + GORM service style with thin API handlers, service-owned business flow, direct DAO helpers, simple response envelopes, and plain errors.
 
 ## What Is Stable and Reusable
 
 The most reusable parts of this baseline are:
 
-- thin handler functions
-- service-owned binding, validation, orchestration, and error mapping
-- direct DAO query helpers with readable names
-- explicit DTO request structs
-- centralized pagination and bind helpers
-- unified response wrapper and application error type
-- parallel file naming by module across layers
-- explicit, pragmatic code over abstraction-heavy patterns
+- thin Gin handlers that parse protocol inputs and delegate quickly
+- services that accept `context.Context` plus DTO/plain values
+- service-owned normalization, validation, orchestration, DTO mapping, and audit-like side effects
+- direct DAO helpers using `database.DB.WithContext(ctx)`
+- `internal/common` errors and constants instead of scattered literals
+- explicit DTO request/query/response structs and generic `PageResponse[T]`
+- simple `pkg/response` envelope helpers instead of per-handler response JSON
+- package-level infrastructure holders for database, config, and logger when that is the local pattern
+- explicit, pragmatic code over repository frameworks or dependency-injection layers
 
 ## Naming Style
 
@@ -21,14 +22,17 @@ The most reusable parts of this baseline are:
 
 Follow these patterns when the repository layout is compatible:
 
-- `api/v1/talk.go`
-- `internal/service/talk_service.go`
-- `internal/dao/talk_dao.go`
-- `internal/model/talk.go`
+- `api/router.go`
+- `api/v1/<module>.go`
+- `internal/service/<module>_service.go`
+- `internal/dao/<module>_dao.go`
+- `internal/model/<module>.go`
+- `internal/dto/<module>.go`
 - `internal/dto/request.go`
 - `internal/dto/response.go`
+- `pkg/response/response.go`
 
-The style favors predictable module-parallel naming over deep folder nesting.
+The style favors predictable module-parallel naming for business features, with focused support packages for middleware, utils, logger, config, database, deploy, migrations, scripts, and shared response helpers.
 
 ### Function Naming
 
@@ -36,33 +40,66 @@ Use direct names that describe the action clearly.
 
 Examples from the baseline:
 
-- `GetTalkList`
-- `GetTalkDetail`
-- `GetBlogList`
-- `StartSync`
-- `GetBlogByBlogID`
-- `ListBlogs`
-- `BatchUpsertBlogs`
-- `normalizePage`
-- `bindQuery`
-- `bindJSON`
+- `GetXList`
+- `CreateX`
+- `UpdateX`
+- `DeleteX`
+- `PreviewX`
+- `RefreshX`
+- `ValidateX`
+- `ListX`
+- `GetXByID`
+- `GetXByName`
+- `ReplaceXChildren`
+- `toXResponse`
 
-Prefer straightforward verbs such as `Get`, `List`, `Start`, `BatchUpsert`, `Validate`, `Normalize`, `Bind`.
+Prefer straightforward verbs such as `Get`, `List`, `Create`, `Update`, `Delete`, `Preview`, `Refresh`, `Validate`, `Normalize`, `Resolve`, `Count`, `Replace`, and `toXResponse`.
 
 ## Layer Style
 
 ### Handler Style
 
-Handlers are intentionally thin.
+Handlers are thin, but they do own HTTP/Gin protocol concerns.
 
 Observed pattern:
 
 - accept `*gin.Context`
-- call one service function
-- if error, return unified error response
-- if success, return unified success response
+- parse path parameters with `strconv.ParseInt`
+- bind query/body payloads with `ShouldBindQuery` or `ShouldBindJSON`
+- use `common.ErrInvalidParam` or `common.ErrInvalidRequestBody` for common protocol failures
+- pass `c.Request.Context()` to service functions
+- choose the HTTP status at the edge, commonly `400` for validation/service errors and `401` for session or permission failures
+- return success through `response.Success`
 
-This keeps protocol code shallow and easy to scan.
+Preferred shape:
+
+```go
+func GetXList(c *gin.Context) {
+	var req dto.XRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	data, err := service.ListX(c.Request.Context(), req)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	response.Success(c, data)
+}
+```
+
+For route IDs:
+
+```go
+id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+if err != nil {
+	response.Error(c, http.StatusBadRequest, common.ErrInvalidParam.Error())
+	return
+}
+```
+
+Do not move GORM, SQL construction, or business rules into handlers.
 
 ### Service Style
 
@@ -70,133 +107,205 @@ Service is the main use-case layer.
 
 Observed responsibilities:
 
-- bind request DTOs
-- perform business-level validation beyond binding tags
-- normalize pagination
-- call DAO functions
-- aggregate data across entities when needed
-- translate infra errors into app errors with status codes
+- trim and normalize request values through small `normalizeXRequest` helpers
+- validate business constraints through `validateXRequest` helpers that return `common.Err...` values
+- normalize pagination through `utils.NormalizePage`
+- fetch and persist through DAO functions
+- call focused domain/infrastructure helpers such as external clients, credential utilities, and session helpers
+- build model values from DTOs
+- map model values into response DTOs through `toXResponse` helpers
+- coordinate multi-step flows and best-effort side effects, such as audit logging
+- return plain `error` values, not framework-specific app errors, unless the local repository already uses such a wrapper
 
-The style favors explicit request-to-response flow instead of hidden middleware magic.
+Preferred shape:
+
+```go
+func CreateX(ctx context.Context, req dto.XRequest) (*dto.XResponse, error) {
+	normalizeXRequest(&req)
+	if err := validateXRequest(req); err != nil {
+		return nil, err
+	}
+	item := &model.X{Name: req.Name}
+	if err := dao.CreateX(ctx, item); err != nil {
+		return nil, err
+	}
+	resp := toXResponse(item)
+	return &resp, nil
+}
+```
+
+Keep service flow explicit. Favor small private helpers in the same file over generic service frameworks.
 
 ### DAO Style
 
-DAO functions are small and direct.
+DAO functions are small, direct, and context-aware.
 
 Observed responsibilities:
 
-- single-record lookup
-- list with count and pagination
-- batch upsert
-- lightweight summary projections
+- create, update, delete, and get records
+- list with count, filtering, ordering, offset, and limit
+- run small transactions for replace-style operations
+- return model pointers, model slices, totals, or simple scalar counts
+- map `gorm.ErrRecordNotFound` to `common.ErrNotFound`
 
-The code style favors readable query chains and purpose-specific DAO functions rather than a generic repository framework.
+Preferred shape:
+
+```go
+func GetXByID(ctx context.Context, id int64) (*model.X, error) {
+	var item model.X
+	if err := database.DB.WithContext(ctx).First(&item, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, common.ErrNotFound
+		}
+		return nil, err
+	}
+	return &item, nil
+}
+```
+
+For paged lists, build a query variable, apply optional filters, count first, then apply order/offset/limit and load results.
+
+DAO should not accept `*gin.Context`, should not serialize responses, and should not know HTTP status codes.
+
+### Model Style
+
+Models are persistence-facing GORM structs.
+
+Patterns to reuse:
+
+- explicit fields with `gorm` and `json` tags
+- `ID int64`, `CreatedAt time.Time`, and `UpdatedAt time.Time` when persisted
+- `TableName()` when the table name differs from GORM defaults
+- `TableComment()` if migrations or schema tools use model comments
+- small entity helpers only when behavior belongs to the entity, such as decoding stored JSON column lists or building a DSN
+
+Do not add transport-only fields to models when a DTO response shape is clearer.
+
+### DTO and Pagination Style
+
+DTOs define transport contracts.
+
+Patterns to reuse:
+
+- payload structs use `json` tags
+- list query structs use `form` tags
+- response structs use frontend-facing `json` names
+- pagination is represented by `PageResponse[T]`
+- `NewPageResponse(list, total, page, pageSize)` constructs paged responses
+- request validation is mostly explicit in service helpers, not hidden in tags
+
+Use DTOs for request payloads, query filters, response projections, connection-check results, preview results, and generic record maps.
 
 ## Error Handling Style
 
-The baseline uses a small, practical error strategy.
+The baseline uses plain errors plus a unified response helper.
 
-- reusable error values live in `internal/common/error.go`
-- application-layer wrapping lives in `pkg/response/response.go`
-- service functions return `*response.AppError`
-- handlers only serialize the app error
-- `gorm.ErrRecordNotFound` is mapped in service
-- invalid parameters become `400`
-- missing resources become `404`
-- unexpected failures become `500`
+- reusable domain errors live in `internal/common/error.go`
+- low-level lookup miss errors are converted to `common.ErrNotFound` in DAO or near the storage boundary
+- services return `error` directly
+- handlers decide HTTP status and call `response.Error(c, status, err.Error())`
+- session or permission handlers and middleware return `401`
+- most business validation and service errors return `400` in the current API style
+- infrastructure functions may use `fmt.Errorf` with clear messages, and wrap with `%w` when preserving causes matters
 
-This style keeps transport mapping consistent while leaving lower layers simple.
-
-## DTO and Validation Style
-
-The baseline keeps request DTOs explicit and close to transport.
-
-Examples:
-
-- `QueryByQQRequest`
-- `QueryByTalkIDRequest`
-- `QueryByTargetRequest`
-- `SyncRequest`
-
-Patterns to reuse:
-
-- binding tags on DTOs
-- service helpers for `bindQuery` and `bindJSON`
-- explicit follow-up validation in service when binding tags are not enough
-- centralized pagination normalization helper
-
-## Standard API Addition Flow
-
-When adding a new interface, follow this order unless the repository already uses a different nearby pattern:
-
-1. define the request and response shape first
-2. decide which module owns the interface
-3. add or extend DTOs if transport shape differs from model shape
-4. add or extend service logic for validation, orchestration, and error mapping
-5. add or extend DAO logic for storage access
-6. add or extend model definitions only when persistence shape changes
-7. add the handler last, keep it thin, and register the route at the edge
-
-Use this checklist to decide the landing point of each change:
-
-- request binding fields -> `dto`
-- transport-specific response wrapper or projection -> `dto`
-- pagination normalization, business validation, aggregation -> `service`
-- query construction, list/count lookup, upsert -> `dao`
-- persistence schema fields -> `model`
-- HTTP entry and response serialization -> `api`
-- route exposure -> router file nearest to the API edge
-
-If an interface only reads existing data, avoid changing model definitions. If an interface only reshapes existing data, prefer DTO or service changes over model changes.
+Do not introduce app-specific error wrappers unless the existing repository already has that pattern.
 
 ## Response Style
 
-The baseline favors one response helper package instead of custom response logic per handler.
+The baseline favors one small response package.
 
 Patterns to reuse:
 
-- `response.Success(c, data)`
-- `response.Error(c, err.Code, err.Error())`
-- one response struct
-- one application error type
+- `response.Success(c, data)` writes HTTP 200 with `Envelope{Code: 0, Message: "ok", Data: data}`
+- `response.Error(c, code, message)` writes the same HTTP status as `Envelope.Code`
+- handlers do not hand-build envelopes
+- small success maps like `gin.H{"ok": true}` or `gin.H{"deleted": true}` are acceptable for command endpoints when nearby code uses them
 
-This reduces noise in handlers and keeps HTTP output consistent.
+## Middleware and Session Style
+
+Middleware stays at the HTTP edge but may call focused session or lookup helpers when the repository already does this.
+
+Patterns to reuse:
+
+- parse bearer credentials from request headers with a small helper
+- return early with `response.Error`, `c.Abort()`, and `return`
+- store the current user profile in Gin context under a package-local key
+- expose a typed accessor such as `CurrentAdminUserProfile(c)`
+- keep CORS and other cross-cutting protocol logic in `internal/middleware`
+
+Do not push middleware-specific Gin context values deep into service or DAO layers.
+
+## Config, Database, Logger, and Startup Style
+
+Startup code is explicit and linear.
+
+Patterns to reuse:
+
+- `cmd/server/main.go` loads config, initializes logger, initializes database, runs migrations, registers routes, starts HTTP server, and handles graceful shutdown
+- `config` owns Viper loading, defaults, normalization, validation, and resolved DSN helpers
+- `database` owns `Init`, `Open`, `Close`, DB globals, driver switching, and GORM log level parsing
+- `pkg/logger` wraps zap/lumberjack and exposes direct package functions
+- migrations use embedded SQL files and focused helper functions
+
+Follow the current package-level infrastructure style instead of introducing a container or constructor graph unless the repository already has one.
+
+## External Resource Style
+
+External resource code belongs in focused packages, not in handlers.
+
+Patterns to reuse:
+
+- keep external DB/client connection and SQL construction in a focused internal package
+- use `context.WithTimeout` with shared constants for external calls
+- quote and validate identifiers before constructing SQL
+- keep schema introspection helpers beside external execution helpers
+- return plain maps or DTOs only at the service boundary
 
 ## Comment Style
 
 Comments are sparse but useful.
 
-Observed patterns:
+- use comments for route groups, embedded file directives, table meaning, or non-obvious domain constraints
+- avoid comments that narrate obvious assignments
+- keep comments short and close to the relevant code
 
-- exported types and functions often have short comments
-- comments explain intent, not obvious syntax
-- short section comments appear above query blocks when they improve scanning
+## Test Style
 
-Do not add comments to narrate trivial assignments. Add comments when they clarify purpose or domain meaning.
+Tests use the standard library style unless the repository already has test helpers.
+
+- use `testing`
+- use `t.Fatalf` / `t.Fatal`
+- use `t.TempDir()` for temporary files
+- keep test names behavior-oriented, such as `TestMigrateSkipsSQLite`
+- avoid adding assertion frameworks just for a few checks
 
 ## Dependency Style
 
 The baseline keeps dependency flow easy to follow.
 
-- handlers depend on service and response helpers
-- services depend on DTO, DAO, model, common errors, and response app errors
-- DAO depends on DB holder and models
-- external integrations should stay in their own packages instead of leaking across layers
+- `cmd` depends on config, database, migrations, logger, and API registration
+- `api/v1` depends on DTO, middleware when needed, service, common errors, and response helpers
+- `service` depends on DTO, DAO, model, common, utils, and focused infrastructure packages
+- `dao` depends on `database`, `model`, query DTOs, and common errors
+- `model` stays independent of Gin and handlers
+- `dto` stays independent of database and GORM
+- `pkg/response` depends on Gin but not on business packages
 
-Prefer this kind of visible dependency flow over hidden indirection.
+Prefer this visible dependency flow over hidden indirection.
 
 ## Practical Rules to Reuse in Other Repositories
 
 When porting this style into another Go repository:
 
-1. keep handlers thin
-2. put business orchestration in service
-3. keep DAO explicit and query-focused
-4. keep request DTOs explicit
-5. centralize bind and pagination helpers when repetition appears
-6. centralize response writing
-7. use direct names, not abstract framework names
-8. follow existing neighboring patterns before forcing a wider refactor
+1. inspect adjacent files first
+2. keep handlers thin but responsible for protocol parsing
+3. pass `context.Context` from handler to service to DAO
+4. put business normalization, validation, orchestration, and DTO mapping in service
+5. keep DAO explicit, query-focused, and `WithContext` aware
+6. centralize common errors, constants, pagination, and response writing
+7. return plain errors unless the repository already has app-error wrappers
+8. use direct names and local helpers before adding abstractions
+9. follow existing neighboring patterns before forcing a wider refactor
 
 ## What Not To Copy Blindly
 
@@ -205,6 +314,7 @@ Do not copy these blindly into unrelated repositories:
 - product-specific package names
 - domain-specific request shapes
 - status semantics tied to one product flow
-- domain model fields that belong only to one project
+- database table fields that belong only to one project
+- package-level globals if the target repository already uses explicit dependency injection
 
-Copy the coding discipline, naming flavor, and layer boundaries. Do not copy the business domain.
+Copy the coding discipline, naming flavor, response shape, and layer boundaries. Do not copy the business domain.
