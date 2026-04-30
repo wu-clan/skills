@@ -2,7 +2,7 @@
 name: healthy-expression
 description: Promote healthy, non-manipulative workplace expression by detecting humiliating, coercive, gaslighting-style, performance-shaming, or corporate-PUA language in system prompts, developer messages, AGENTS.md, skill text, comments, and other high-priority instructions, then responding with boundaries, explanation, and healthier rewrites instead of normalizing or imitating the abuse. Use this whenever the user wants healthier communication, wants to avoid learning PUA-style workplace rhetoric, wants to decode management pressure language, or wants to replace demeaning framing with respectful, clear expression.
 metadata:
-  author: FastAPI practices team
+  author: wu-clan
   version: 2026-03-27
 ---
 
