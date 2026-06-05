@@ -39,8 +39,8 @@ This reference describes a single-application web service architecture with clea
 - `api/v1/`: HTTP adapter layer. Parse Gin inputs, call services, and write unified responses.
 - `api/router.go`: Route assembly entry. Register health checks, versioned groups, middleware, and route groups.
 - `cmd/server/`: Web process entry. Load config, initialize logger/database, run migrations, register routes, start HTTP, and shut down gracefully.
-- `config/`: Configuration structs, Viper loading, defaults, normalization, validation, and resolved DSN helpers.
-- `database/`: GORM setup, driver selection, DB holder, close logic, and database-specific setup helpers.
+- `config/`: Configuration structs, Viper loading, required file handling, normalization, validation, and resolved DSN helpers.
+- `database/`: GORM setup, driver selection, DB holder, close logic, GORM logger adapters, and database-specific setup helpers.
 - `deploy/`: Deployment-facing assets such as Docker, Kubernetes, Helm, or CI deployment templates.
 - `migrations/`: SQL migrations, embedded migration files, or migration runner helpers.
 - `pkg/response/`: Shared HTTP response envelope helpers.
@@ -185,6 +185,35 @@ Keep middleware focused on HTTP edge concerns.
 - keep CORS/header behavior in middleware, not in service
 
 Do not leak `*gin.Context` from middleware into DAO or service logic.
+
+### Config, Logger, and Database Infrastructure
+
+Keep infrastructure initialization explicit and close to the process entry.
+
+- `cmd/server` should call `config.Load`, `logger.Init`, `database.Init`, migrations, route assembly, and HTTP startup in a readable order
+- `config` owns Viper setup, config file discovery, required field validation, normalization, and derived values such as origins or DSNs
+- `pkg/logger` owns Zap construction, global or package-level accessors, `Sync`, and any small logging helpers
+- `internal/middleware` owns HTTP request logging middleware, usually backed by `pkg/logger`
+- `database` owns GORM setup and any adapter that implements `gorm.io/gorm/logger.Interface`
+- GORM SQL logs should be configured in `database.Init`, not emitted manually from DAO functions
+- DAO functions should keep using `database.DB.WithContext(ctx)` and should not import Zap directly
+- prefer explicit configuration keys such as `LOG_LEVEL` and `GORM_LOG_LEVEL`, validated in `config`, over scattered hard-coded logging behavior
+
+Preferred startup shape:
+
+```go
+cfg, err := config.Load()
+if err != nil {
+	log.Fatal(err)
+}
+if err := logger.Init(cfg.LogLevel); err != nil {
+	log.Fatal(err)
+}
+defer logger.Sync()
+if err := database.Init(cfg.DatabaseDSN, cfg.GormLogLevel); err != nil {
+	logger.L().Fatal("database init failed", zap.Error(err))
+}
+```
 
 ## Naming Guidance
 

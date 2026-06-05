@@ -51,8 +51,8 @@ Separate by application boundary first, by technical layer second. Decide which 
 ## Directory Responsibilities
 
 - `cmd/<app>/`: Process entry for one app. Assemble shared infrastructure and start that app's service.
-- `config/`: Shared configuration structs, loading, defaults, validation, and resolved DSN helpers.
-- `database/`: Shared GORM setup, driver selection, DB holder, and close logic.
+- `config/`: Shared configuration structs, loading, required file handling, validation, and resolved DSN helpers.
+- `database/`: Shared GORM setup, driver selection, DB holder, close logic, and GORM logger adapters.
 - `deploy/`: Deployment-facing assets such as Docker, Kubernetes, Helm, or CI deployment templates.
 - `migrations/`: Shared schema migrations or app-specific migration assets when the repository uses them.
 - `pkg/response/`: Shared HTTP response envelope helpers.
@@ -161,6 +161,18 @@ Bad shared candidates:
 - app-specific service rules
 - app-specific query projections
 - business rules that only one app understands
+
+### Config, Logger, and Database Infrastructure
+
+Keep shared infrastructure neutral and reusable across app entries.
+
+- `cmd/<app>` should initialize config, Zap logger, database, migrations, app routes, and HTTP startup explicitly
+- `config` owns Viper setup, config file discovery, required field validation, normalization, and app-specific derived values
+- `pkg/logger` owns Zap construction, shared accessors, `Sync`, and small helper functions
+- `internal/middleware` owns HTTP request logging middleware and should depend only on shared logger/response/session helpers
+- `database` owns GORM setup and any adapter that implements `gorm.io/gorm/logger.Interface`
+- GORM SQL logging should be configured through `database.Init`, not scattered through app DAO functions
+- app-specific services and DAOs should not import Viper or initialize Zap
 
 ## Naming Guidance
 

@@ -14,6 +14,9 @@ The most reusable parts of this baseline are:
 - explicit DTO request/query/response structs and generic `PageResponse[T]`
 - simple `pkg/response` envelope helpers instead of per-handler response JSON
 - package-level infrastructure holders for database, config, and logger when that is the local pattern
+- Viper-owned config loading in `config`, following the project policy for file-only or environment-aware config, with normalization and validation in one place
+- Zap-owned process and request logging through `pkg/logger` and HTTP middleware
+- GORM setup and SQL logging adapters in `database`, keeping DAO functions focused on queries
 - explicit, pragmatic code over repository frameworks or dependency-injection layers
 
 ## Naming Style
@@ -242,10 +245,26 @@ Startup code is explicit and linear.
 Patterns to reuse:
 
 - `cmd/server/main.go` loads config, initializes logger, initializes database, runs migrations, registers routes, starts HTTP server, and handles graceful shutdown
-- `config` owns Viper loading, defaults, normalization, validation, and resolved DSN helpers
+- `config` owns Viper loading, required file handling, normalization, validation, and resolved DSN helpers
 - `database` owns `Init`, `Open`, `Close`, DB globals, driver switching, and GORM log level parsing
 - `pkg/logger` wraps zap/lumberjack and exposes direct package functions
 - migrations use embedded SQL files and focused helper functions
+
+Infrastructure placement rules:
+
+
+Config loading policy:
+
+- follow the repository's existing config policy before adding defaults or environment overrides
+- if a project requires explicit config files, do not call `AutomaticEnv` and do not add `SetDefault`; return clear errors for missing files or required keys
+- if a project already supports environment overrides, keep that behavior centralized in `config` and document the precedence
+
+- use Viper in `config` only; business layers should receive normalized config values or use already-initialized infrastructure
+- initialize Zap in the process entry through `pkg/logger`, then use narrow helpers such as `logger.L()` and `logger.Sync()`
+- put HTTP request logging in middleware, not in handlers
+- put GORM logger adapters in `database`, implementing `gorm.io/gorm/logger.Interface`
+- pass log level and GORM log level from config into logger/database initialization
+- keep DAO functions free of logging side effects unless the repository already has an explicit audit pattern
 
 Follow the current package-level infrastructure style instead of introducing a container or constructor graph unless the repository already has one.
 

@@ -3,7 +3,7 @@ name: go-web
 description: Apply pragmatic Go web service conventions for Gin/GORM-style repositories that follow either (1) a single-application layered layout at the Go module root, with api, cmd, config, database, deploy, migrations, pkg, scripts, and internal service/dao/model/dto packages, or (2) a multi-entry or multi-app layout with per-app cmd entries and internal/app app subtrees. Use this when Codex needs to inspect a Go service, classify its structure, then apply matching layer responsibilities, naming, response, error, context, DAO, model, DTO, middleware, and file-placement guidance.
 metadata:
   author: wu-clan
-  version: 2026-04-30
+  version: 2026-06-05
 ---
 
 # Go Coding Style Guide
@@ -18,6 +18,7 @@ Use this skill to apply a practical Go coding style and layer discipline for ser
 4. load only the matching structure reference
 5. read `references/style-baseline.md` as the style baseline
 6. place new code into the existing repository boundaries while keeping the same Gin, GORM, response, error, and context discipline
+7. when introducing infrastructure such as Viper, Zap, or GORM logging, keep it in `config`, `database`, `pkg/logger`, `internal/middleware`, and `cmd/<entry>` rather than service or DAO business files
 
 ## Structure Selection
 
@@ -78,6 +79,9 @@ Apply these rules regardless of structure:
 - keep transport structs in DTO when they differ from persistence models
 - centralize response writing through the existing response helper
 - centralize reusable domain errors in the existing common errors package
+- keep Viper configuration loading in `config`, following the project policy for file-only or environment-aware config, with normalization and validation in one place
+- keep Zap setup in `pkg/logger` or the repository's existing logger package, and use middleware for HTTP request logging
+- keep GORM setup and GORM logger adapters in `database`, with DAO code continuing to call the local DB holder through `WithContext(ctx)`
 - avoid introducing cross-layer imports that invert dependencies
 - follow existing naming in the repository before inventing a new style
 - prefer explicit, repetitive clarity over clever abstractions when the codebase already favors it
@@ -88,6 +92,9 @@ Apply these rules regardless of structure:
 - do not move many files just to satisfy a textbook architecture
 - do not put SQL or GORM query logic in handlers
 - do not put HTTP framework types deep inside DAO code
+- do not load Viper config from handlers, services, DAOs, or models
+- do not initialize Zap from business layers; initialize it from the process entry and expose narrow logging helpers
+- do not make DAO code depend on Zap directly when a GORM logger adapter in `database` can own SQL logging
 - do not introduce app-specific error wrappers, repository interfaces, or dependency-injection frameworks when the existing code returns plain errors and uses package-level infra holders
 - do not duplicate DTO and model types without a clear transport or persistence boundary
 - do not introduce broad `utils` dumping grounds when a focused package would be clearer
