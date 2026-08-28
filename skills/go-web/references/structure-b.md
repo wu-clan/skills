@@ -35,18 +35,17 @@ myproject/
 │   │       ├── model/
 │   │       └── dto/
 │   ├── middleware/
-│   ├── utils/
 │   └── common/
 ├── scripts/
 ├── go.mod
 └── README.md
 ```
 
-This reference describes a multi-application repository where multiple delivery surfaces share infrastructure, but each app keeps its own API, service, DAO, model, and DTO boundaries.
+This reference describes a multi-application repository where multiple delivery surfaces share infrastructure, but each app keeps its own three layers: API, service, and DAO, plus that app's model and DTO.
 
 ## Core Principle
 
-Separate by application boundary first, by technical layer second. Decide which app owns the feature before deciding which layer inside that app owns the code.
+Separate by application boundary first, by technical layer second. Decide which app owns the feature before deciding which layer inside that app owns the code. Inside an app, keep the same three-layer rules as Structure A.
 
 ## Directory Responsibilities
 
@@ -57,15 +56,14 @@ Separate by application boundary first, by technical layer second. Decide which 
 - `migrations/`: Shared schema migrations or app-specific migration assets when the repository uses them.
 - `pkg/response/`: Shared HTTP response envelope helpers.
 - `pkg/logger/`: Shared logging setup and package-level logging helpers.
-- `internal/app/<app>/api/v1/`: App-specific HTTP adapter layer.
+- `internal/app/<app>/api/v1/`: App-specific presentation layer.
 - `internal/app/<app>/api/router.go`: App-specific route assembly entry.
-- `internal/app/<app>/service/`: App-specific use-case orchestration layer.
-- `internal/app/<app>/dao/`: App-specific data access layer.
+- `internal/app/<app>/service/`: App-specific business layer.
+- `internal/app/<app>/dao/`: App-specific data layer.
 - `internal/app/<app>/model/`: App-specific persistence entities or projections.
 - `internal/app/<app>/dto/`: App-specific request and response contracts.
 - `internal/middleware/`: Cross-cutting middleware reusable across apps.
-- `internal/utils/`: Narrow shared helpers such as pagination defaults.
-- `internal/common/`: Low-coupling constants and reusable domain errors.
+- `internal/common/`: Low-coupling constants, reusable domain errors, and pagination defaults.
 - `scripts/`: Build, release, operations, and developer support scripts.
 
 ## Dependency Direction
@@ -75,11 +73,13 @@ Preferred direction inside one app:
 ```text
 cmd/<app> -> internal/app/<app>/api -> api/v1 -> service -> dao -> database
                                                 -> dto/model
-                                                -> common/utils/shared helpers
-shared infra: config, database, pkg, internal/common, internal/middleware
+                                                -> common
+infra: config, database, pkg, internal/common, internal/middleware
 ```
 
 Cross-app imports should be rare. Prefer extracting truly shared behavior into a neutral shared package rather than importing one app's private service package from another. Shared infrastructure can be common; business ownership should stay app-local unless there is a strong reason to merge.
+
+Each app service must not import Gin or GORM. Each app DAO may accept that app's query DTOs.
 
 ## Coding Style
 
@@ -115,12 +115,12 @@ Reuse the same plain-error service style inside each app.
 - normalize payloads with small helpers
 - validate business constraints explicitly
 - normalize pagination centrally
-- call app DAO functions with context and plain values
-- coordinate shared helpers, external clients, session checks, audit, or encryption as needed
+- call app DAO functions with context and plain values or query DTOs
+- coordinate common helpers, external clients, session checks, audit, or encryption as needed
 - map model values to app response DTOs
 - return plain `error` values unless the repository already uses app-error wrappers
 
-Service is still the main business layer in a multi-app repository; app split does not weaken layer discipline.
+Service is still the main business layer in a multi-app repository; app split does not weaken layer discipline. App services must not import Gin or GORM.
 
 ### DAO Style
 
@@ -131,6 +131,7 @@ Reuse the same direct DAO style inside each app.
 - keep query logic readable
 - return model slices, projections, totals, single models, or scalar counts explicitly
 - map `gorm.ErrRecordNotFound` to shared or app-local not-found errors
+- own transactions for multi-step persistence
 - avoid HTTP types and response wrappers in DAO
 
 DAO belongs to the app when query shape or ownership is app-specific. Only move DAO code to shared packages when multiple apps truly need the same persistence behavior.
@@ -150,7 +151,7 @@ Good shared candidates:
 - logger setup
 - config and database setup
 - common error values and constants
-- pagination defaults
+- pagination defaults, error values, and constants in `internal/common`
 - session middleware when behavior is identical across apps
 - external-resource clients with no app-specific business rules
 
@@ -235,7 +236,7 @@ Preferred ownership by concern:
 - app-specific request and response shape -> app DTO
 - app-specific normalization, validation, orchestration -> app service
 - app-specific query behavior -> app DAO
-- shared error values, constants, or pagination defaults -> `internal/common` or `internal/utils`
+- error values, constants, or pagination defaults -> `internal/common`
 - final response serialization -> app handler through shared response helpers
 
 ## Common Anti-Patterns
@@ -245,8 +246,10 @@ Avoid these:
 - putting all handlers for every app into one global `api/`
 - importing one app's private service package from another app
 - moving app DTOs into shared packages prematurely
-- creating huge `common` or `utils` packages that hide ownership
+- creating a huge `common` package that hides ownership
+- adding an `internal/utils` package or a `shared` subdirectory under `common`; put pagination and constants in `internal/common`
 - coupling unrelated app startup logic inside one `cmd` entry
 - weakening layer boundaries just because the repo has multiple apps
+- letting app services import Gin or GORM
 - introducing repository interfaces or dependency injection frameworks when the existing code uses direct package helpers
 - introducing app-error wrappers in a plain-error codebase

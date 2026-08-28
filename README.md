@@ -12,7 +12,7 @@ npx skills add wu-clan/skills
 
 ### go-web
 
-Apply pragmatic Go web service conventions for Gin/GORM-style repositories with layered API, service, DAO, model, DTO, middleware, config, database, deploy, migrations, pkg, and scripts organization.
+Apply pragmatic three-layer Go web conventions for Gin/GORM-style repositories with API, service, DAO, model, DTO, middleware, config, database, deploy, migrations, pkg, and scripts organization.
 
 **Use Cases:**
 

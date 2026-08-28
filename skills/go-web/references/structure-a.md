@@ -24,7 +24,6 @@ myproject/
 │   ├── model/
 │   ├── dto/
 │   ├── middleware/
-│   ├── utils/
 │   └── common/
 ├── scripts/
 ├── go.mod
@@ -32,11 +31,11 @@ myproject/
 └── README.md
 ```
 
-This reference describes a single-application web service architecture with clear layer boundaries. A secondary command or migration entry may exist, but the HTTP API, service layer, DAO layer, and support packages still belong to one application boundary.
+This reference describes a single-application three-layer web service: API, service, and DAO. A secondary command or migration entry may exist, but the HTTP API, service layer, DAO layer, and support packages still belong to one application boundary.
 
 ## Directory Responsibilities
 
-- `api/v1/`: HTTP adapter layer. Parse Gin inputs, call services, and write unified responses.
+- `api/v1/`: Presentation layer. Parse Gin inputs, call services, and write unified responses.
 - `api/router.go`: Route assembly entry. Register health checks, versioned groups, middleware, and route groups.
 - `cmd/server/`: Web process entry. Load config, initialize logger/database, run migrations, register routes, start HTTP, and shut down gracefully.
 - `config/`: Configuration structs, Viper loading, required file handling, normalization, validation, and resolved DSN helpers.
@@ -45,13 +44,12 @@ This reference describes a single-application web service architecture with clea
 - `migrations/`: SQL migrations, embedded migration files, or migration runner helpers.
 - `pkg/response/`: Shared HTTP response envelope helpers.
 - `pkg/logger/`: Logging setup and package-level logging helpers.
-- `internal/service/`: Use-case orchestration layer for normalization, validation, pagination, external calls, DTO mapping, side effects, and error propagation.
-- `internal/dao/`: Data access layer for CRUD, conditional queries, counts, transactions, and not-found mapping.
+- `internal/service/`: Business layer. Normalization, validation, pagination, external calls, DTO mapping, side effects, and error propagation.
+- `internal/dao/`: Data layer. CRUD, conditional queries, counts, transactions, and not-found mapping.
 - `internal/model/`: Persistence entities and storage-facing helpers.
 - `internal/dto/`: Request payloads, query structs, response projections, pagination wrappers, and external API contracts.
 - `internal/middleware/`: Cross-cutting HTTP concerns such as session checks, CORS, logging, tracing, rate limiting, and recovery.
-- `internal/utils/`: Narrow reusable helpers such as pagination defaults and default values.
-- `internal/common/`: Low-coupling constants and reusable domain errors.
+- `internal/common/`: Low-coupling constants, reusable domain errors, and pagination defaults.
 - `scripts/`: Build, release, operations, and developer support scripts.
 
 ## Dependency Direction
@@ -61,15 +59,15 @@ Preferred direction:
 ```text
 cmd/server -> api -> api/v1 -> service -> dao -> database
                                       -> model
-                                      -> utils/common
+                                      -> common
 api/v1 -> dto, middleware, response, common
 middleware -> dto, response, common, focused lookup helpers
-service -> dto, model, dao, common, utils, focused pkg/internal helpers
+service -> dto, model, dao, common, focused pkg/internal helpers
 dao -> database, dto query structs, model, common
 config/database/pkg are infrastructure dependencies
 ```
 
-Keep the direction mostly one-way. Handler depends on service, not DAO. DAO should not import handler code. Model should not depend on Gin. DTO should not control database behavior. Middleware may call focused lookup helpers when it is an edge concern, but it should not pull service business flows into every request.
+Keep the direction mostly one-way. Handler depends on service, not DAO. DAO should not import handler code. Model should not depend on Gin. DTO should not control database behavior. Service should not import Gin or GORM. Middleware may call focused lookup helpers when it is an edge concern, but it should not pull service business flows into every request.
 
 ## Coding Style
 
@@ -117,14 +115,14 @@ Service owns use-case execution.
 - accept `context.Context` plus DTO/plain values
 - trim and normalize requests with private `normalizeXRequest` helpers
 - validate business rules with private `validateXRequest` helpers
-- normalize pagination through `utils.NormalizePage`
-- call DAO functions with context and plain values
+- normalize pagination through `common.NormalizePage`
+- call DAO functions with context and plain values or DTO query structs
 - build model structs from DTO payloads
 - convert model structs into response DTOs with `toXResponse` helpers
 - coordinate external clients, credential/session helpers, audit logs, and other multi-step flows
 - return plain `error` values unless the repository already uses app-error wrappers
 
-Prefer explicit flow over abstraction-heavy service frameworks. Service should express business steps clearly and should not hide key rules inside middleware or DAO.
+Prefer explicit flow over abstraction-heavy service frameworks. Service should express business steps clearly and should not hide key rules inside middleware or DAO. Service should not import Gin or GORM.
 
 ### DAO
 
@@ -172,7 +170,7 @@ Use DTOs for transport boundaries and interface contracts.
 - `PageResponse[T]` and `NewPageResponse` own paginated response shape
 - validation should remain explicit in service helpers unless the local code already relies on binding tags
 
-DTO is the right place for request payloads, pagination parameters, filtering fields, response projections, preview responses, and connection-check responses.
+DTO is the right place for request payloads, pagination parameters, filtering fields, response projections, preview responses, and connection-check responses. DAO may accept query DTOs.
 
 ### Middleware
 
@@ -263,7 +261,7 @@ When adding a new resource or module:
 4. add or extend models in `internal/model/` only if persistence changes
 5. add handler functions under `api/v1/` or the existing API folder
 6. register routes in `api/router.go` or the existing router file
-7. add middleware, utils, or focused pkg/internal helpers only when the concern clearly belongs there
+7. add middleware or focused pkg/internal helpers only when the concern clearly belongs there
 
 If the feature is command-only, prefer `cmd/<entry>/` plus focused package helpers instead of exposing an HTTP route.
 
@@ -285,7 +283,7 @@ Preferred ownership by concern:
 
 - parse path/query/body -> handler
 - validate business input -> service
-- normalize pagination/defaults -> service or narrow `internal/utils`
+- normalize pagination/defaults -> service or `internal/common`
 - fetch or persist data -> DAO
 - map storage miss to common not-found -> DAO/storage boundary
 - map model to API shape -> service/DTO
@@ -298,10 +296,11 @@ Avoid these:
 
 - handlers calling `database.DB` directly
 - service logic copied into multiple handlers
+- service importing Gin or GORM, or accepting `*gorm.DB`
 - DAO functions returning HTTP-specific response objects
 - DAO functions accepting `*gin.Context`
 - introducing an app-error wrapper in a plain-error codebase
 - introducing repository interfaces or dependency injection for simple CRUD when the codebase uses direct package helpers
 - generic service abstractions that make simple CRUD harder to read
 - one giant service file owning unrelated modules
-- broad `utils` packages for feature-specific business rules
+- adding an `internal/utils` package or a `shared` subdirectory under `common`; put pagination and constants in `internal/common`

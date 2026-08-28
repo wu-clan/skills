@@ -1,14 +1,14 @@
 ---
 name: go-web
-description: Apply pragmatic Go web service conventions for Gin/GORM-style repositories that follow either (1) a single-application layered layout at the Go module root, with api, cmd, config, database, deploy, migrations, pkg, scripts, and internal service/dao/model/dto packages, or (2) a multi-entry or multi-app layout with per-app cmd entries and internal/app app subtrees. Use this when Codex needs to inspect a Go service, classify its structure, then apply matching layer responsibilities, naming, response, error, context, DAO, model, DTO, middleware, and file-placement guidance.
+description: Apply pragmatic three-layer Go web conventions for Gin/GORM-style repositories that follow either (1) a single-application layout at the Go module root, with api, cmd, config, database, deploy, migrations, pkg, scripts, and internal service/dao/model/dto packages, or (2) a multi-entry or multi-app layout with per-app cmd entries and internal/app subtrees where each app owns api, service, dao, model, and dto. Use this when Codex needs to inspect a Go service, classify its structure, then apply matching three-layer responsibilities, naming, response, error, context, DAO, model, DTO, middleware, and file-placement guidance.
 metadata:
   author: wu-clan
-  version: 2026-06-05
+  version: 2026-08-28
 ---
 
 # Go Coding Style Guide
 
-Use this skill to apply a practical Go coding style and layer discipline for service-oriented repositories. The goal is to keep the code explicit, layered, readable, and easy to extend without introducing unnecessary abstractions or framework-heavy indirection.
+Use this skill to apply a practical three-layer Go coding style for service-oriented repositories. The layers are API (presentation), service (business), and DAO (data). Supporting packages such as model, dto, middleware, and common are not additional layers. The goal is to keep the code explicit, layered, readable, and easy to extend without introducing unnecessary abstractions or framework-heavy indirection.
 
 ## Workflow
 
@@ -28,14 +28,14 @@ Choose Structure A when most of these signals are present:
 - `cmd/server` or `cmd/<single-entry>` exists
 - `internal/service`, `internal/dao`, `internal/model`, `internal/dto` exist at the same level
 - routing is centralized in `api/router.go`
-- support directories such as `config`, `database`, `deploy`, `migrations`, `pkg/response`, `pkg/logger`, `scripts`, `internal/middleware`, `internal/common`, or `internal/utils` sit beside the layers
+- support directories such as `config`, `database`, `deploy`, `migrations`, `pkg/response`, `pkg/logger`, `scripts`, `internal/middleware`, or `internal/common` sit beside the layers
 - business modules are represented by parallel files such as `<module>_service.go`, `<module>_dao.go`, `<module>.go`
 
 Choose Structure B when most of these signals are present:
 
 - `cmd/` contains multiple application entries such as `cmd/admin`, `cmd/client`
 - `internal/app/<app>/` exists
-- each app owns its own `api`, `service`, `dao`, `model`, and `dto`
+- each app owns its own three layers plus supporting types: `api`, `service`, `dao`, `model`, and `dto`
 - shared code lives outside app folders, usually in `internal/common`, `internal/middleware`, `pkg`, `config`, `database`
 
 ## Tie-Break Rules
@@ -63,6 +63,23 @@ When giving implementation guidance, answer in this order:
 - Structure A: read `references/structure-a.md`
 - Structure B: read `references/structure-b.md`
 - Style baseline: read `references/style-baseline.md`
+
+## Three-Layer Rules
+
+This skill is a three-layer architecture. Keep every feature inside these layers:
+
+- Presentation (`api`): Gin binding, path/query parsing, calling one service function, choosing HTTP status, writing the response envelope. Extract session or current-user values here and pass them to service as DTO or plain values.
+- Business (`service`): use-case orchestration, normalization, business validation, DTO/model mapping, calling DAO and focused helpers. Accept `context.Context` plus DTO/plain values. Return `error`. Do not import Gin. Do not import GORM or accept `*gorm.DB`.
+- Data (`dao`): CRUD, filters, counts, transactions, and storage-miss mapping. Use `database.DB.WithContext(ctx)` or the local DB holder. May accept DTO query structs. Return models or scalars. Do not import Gin. Do not write HTTP responses.
+
+Supporting packages sit beside the three layers; they are not a fourth layer:
+
+- `internal/model`: persistence entities
+- `internal/dto`: request, query, and response contracts used by API and service, and query structs used by DAO
+- `internal/middleware`: HTTP edge concerns
+- `internal/common`: constants, reusable domain errors, and pagination defaults
+
+Do not add an `internal/utils` package. Do not add domain, repository-interface, transaction-manager, or actor-mapping layers on top of API/service/DAO.
 
 ## General Go Rules
 
@@ -92,10 +109,11 @@ Apply these rules regardless of structure:
 - do not move many files just to satisfy a textbook architecture
 - do not put SQL or GORM query logic in handlers
 - do not put HTTP framework types deep inside DAO code
+- do not let service import Gin or GORM, and do not pass `*gorm.DB` through the service layer; transactions belong in DAO
 - do not load Viper config from handlers, services, DAOs, or models
 - do not initialize Zap from business layers; initialize it from the process entry and expose narrow logging helpers
 - do not make DAO code depend on Zap directly when a GORM logger adapter in `database` can own SQL logging
 - do not introduce app-specific error wrappers, repository interfaces, or dependency-injection frameworks when the existing code returns plain errors and uses package-level infra holders
 - do not duplicate DTO and model types without a clear transport or persistence boundary
-- do not introduce broad `utils` dumping grounds when a focused package would be clearer
+- do not add an `internal/utils` package or a `shared` subdirectory under `common`; put pagination defaults and other low-coupling helpers in `internal/common`
 - do not copy product-specific package names, domain models, or API semantics into unrelated repositories

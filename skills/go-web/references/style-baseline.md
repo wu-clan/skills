@@ -1,6 +1,6 @@
 # Style Baseline
 
-Use this reference as the style source for the Go skill. It captures a pragmatic Gin + GORM service style with thin API handlers, service-owned business flow, direct DAO helpers, simple response envelopes, and plain errors.
+Use this reference as the style source for the Go skill. It captures a pragmatic three-layer Gin + GORM service style with thin API handlers, service-owned business flow, direct DAO helpers, simple response envelopes, and plain errors.
 
 ## What Is Stable and Reusable
 
@@ -10,7 +10,8 @@ The most reusable parts of this baseline are:
 - services that accept `context.Context` plus DTO/plain values
 - service-owned normalization, validation, orchestration, DTO mapping, and audit-like side effects
 - direct DAO helpers using `database.DB.WithContext(ctx)`
-- `internal/common` errors and constants instead of scattered literals
+- DAO functions that may accept DTO query structs
+- `internal/common` errors, constants, and pagination helpers instead of scattered literals
 - explicit DTO request/query/response structs and generic `PageResponse[T]`
 - simple `pkg/response` envelope helpers instead of per-handler response JSON
 - package-level infrastructure holders for database, config, and logger when that is the local pattern
@@ -35,7 +36,7 @@ Follow these patterns when the repository layout is compatible:
 - `internal/dto/response.go`
 - `pkg/response/response.go`
 
-The style favors predictable module-parallel naming for business features, with focused support packages for middleware, utils, logger, config, database, deploy, migrations, scripts, and shared response helpers.
+The style favors predictable module-parallel naming for business features, with focused support packages for middleware, common, logger, config, database, deploy, migrations, scripts, and shared response helpers.
 
 ### Function Naming
 
@@ -62,7 +63,7 @@ Prefer straightforward verbs such as `Get`, `List`, `Create`, `Update`, `Delete`
 
 ### Handler Style
 
-Handlers are thin, but they do own HTTP/Gin protocol concerns.
+Handlers are the presentation layer. They are thin, but they do own HTTP/Gin protocol concerns.
 
 Observed pattern:
 
@@ -70,6 +71,7 @@ Observed pattern:
 - parse path parameters with `strconv.ParseInt`
 - bind query/body payloads with `ShouldBindQuery` or `ShouldBindJSON`
 - use `common.ErrInvalidParam` or `common.ErrInvalidRequestBody` for common protocol failures
+- extract current-user or session values with the middleware accessor and pass DTO or plain values into service; do not pass `*gin.Context`
 - pass `c.Request.Context()` to service functions
 - choose the HTTP status at the edge, commonly `400` for validation/service errors and `401` for session or permission failures
 - return success through `response.Success`
@@ -80,7 +82,7 @@ Preferred shape:
 func GetXList(c *gin.Context) {
 	var req dto.XRequest
 	if err := c.ShouldBindQuery(&req); err != nil {
-		response.Error(c, http.StatusBadRequest, err.Error())
+		response.Error(c, http.StatusBadRequest, common.ErrInvalidRequestBody.Error())
 		return
 	}
 	data, err := service.ListX(c.Request.Context(), req)
@@ -106,13 +108,13 @@ Do not move GORM, SQL construction, or business rules into handlers.
 
 ### Service Style
 
-Service is the main use-case layer.
+Service is the business layer and the main use-case layer.
 
 Observed responsibilities:
 
 - trim and normalize request values through small `normalizeXRequest` helpers
 - validate business constraints through `validateXRequest` helpers that return `common.Err...` values
-- normalize pagination through `utils.NormalizePage`
+- normalize pagination through `common.NormalizePage`
 - fetch and persist through DAO functions
 - call focused domain/infrastructure helpers such as external clients, credential utilities, and session helpers
 - build model values from DTOs
@@ -137,19 +139,22 @@ func CreateX(ctx context.Context, req dto.XRequest) (*dto.XResponse, error) {
 }
 ```
 
-Keep service flow explicit. Favor small private helpers in the same file over generic service frameworks.
+When a use case needs the current user, accept a plain identifier or DTO field from the handler, not a Gin or GORM type.
+
+Keep service flow explicit. Favor small private helpers in the same file over generic service frameworks. Service must not import Gin or GORM and must not accept `*gorm.DB`.
 
 ### DAO Style
 
-DAO functions are small, direct, and context-aware.
+DAO is the data layer. Functions are small, direct, and context-aware.
 
 Observed responsibilities:
 
 - create, update, delete, and get records
 - list with count, filtering, ordering, offset, and limit
-- run small transactions for replace-style operations
+- run small transactions for replace-style or multi-step persistence operations
 - return model pointers, model slices, totals, or simple scalar counts
 - map `gorm.ErrRecordNotFound` to `common.ErrNotFound`
+- accept DTO query structs when the list or filter shape already lives in `internal/dto`
 
 Preferred shape:
 
@@ -168,7 +173,7 @@ func GetXByID(ctx context.Context, id int64) (*model.X, error) {
 
 For paged lists, build a query variable, apply optional filters, count first, then apply order/offset/limit and load results.
 
-DAO should not accept `*gin.Context`, should not serialize responses, and should not know HTTP status codes.
+DAO should not accept `*gin.Context`, should not serialize responses, and should not know HTTP status codes. Transactions belong here, using `database.DB.WithContext(ctx).Transaction`, not in the service layer.
 
 ### Model Style
 
@@ -186,7 +191,7 @@ Do not add transport-only fields to models when a DTO response shape is clearer.
 
 ### DTO and Pagination Style
 
-DTOs define transport contracts.
+DTOs define transport contracts and, when useful, DAO list/filter arguments.
 
 Patterns to reuse:
 
@@ -196,6 +201,7 @@ Patterns to reuse:
 - pagination is represented by `PageResponse[T]`
 - `NewPageResponse(list, total, page, pageSize)` constructs paged responses
 - request validation is mostly explicit in service helpers, not hidden in tags
+- pagination defaults live in `internal/common`, for example `common.NormalizePage`
 
 Use DTOs for request payloads, query filters, response projections, connection-check results, preview results, and generic record maps.
 
@@ -236,7 +242,7 @@ Patterns to reuse:
 - expose a typed accessor such as `CurrentAdminUserProfile(c)`
 - keep CORS and other cross-cutting protocol logic in `internal/middleware`
 
-Do not push middleware-specific Gin context values deep into service or DAO layers.
+The handler reads that accessor and passes plain values or DTOs into service. Do not push middleware-specific Gin context values deep into service or DAO layers.
 
 ## Config, Database, Logger, and Startup Style
 
@@ -304,13 +310,13 @@ The baseline keeps dependency flow easy to follow.
 
 - `cmd` depends on config, database, migrations, logger, and API registration
 - `api/v1` depends on DTO, middleware when needed, service, common errors, and response helpers
-- `service` depends on DTO, DAO, model, common, utils, and focused infrastructure packages
+- `service` depends on DTO, DAO, model, common, and focused infrastructure packages
 - `dao` depends on `database`, `model`, query DTOs, and common errors
 - `model` stays independent of Gin and handlers
 - `dto` stays independent of database and GORM
 - `pkg/response` depends on Gin but not on business packages
 
-Prefer this visible dependency flow over hidden indirection.
+Prefer this visible dependency flow over hidden indirection. Service must not depend on Gin or GORM.
 
 ## Practical Rules to Reuse in Other Repositories
 
